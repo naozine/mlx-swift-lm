@@ -676,8 +676,8 @@ public class Gemma4Model: Module, LLMModel {
             }
         }
 
-        // tie_word_embeddings: copy embed_tokens to lm_head if missing
-        if processedWeights["lm_head.weight"] == nil {
+        // Copy embed_tokens to lm_head if missing and not using tied embeddings
+        if !config.tieWordEmbeddings && processedWeights["lm_head.weight"] == nil {
             ["weight", "scales", "biases"].forEach { key in
                 if let embedWeight = processedWeights["model.embed_tokens.\(key)"] {
                     processedWeights["lm_head.\(key)"] = embedWeight
