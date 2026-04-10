@@ -81,6 +81,25 @@ public enum JSONValue: Hashable, Codable, Sendable {
         }
     }
 
+    public var sendableValue: any Sendable {
+        switch self {
+        case .null:
+            return NSNull()
+        case .bool(let value):
+            return value
+        case .int(let value):
+            return value
+        case .double(let value):
+            return value
+        case .string(let value):
+            return value
+        case .array(let value):
+            return value.map { $0.sendableValue }
+        case .object(let value):
+            return value.mapValues { $0.sendableValue }
+        }
+    }
+
     public var anyValue: Any {
         switch self {
         case .null:
