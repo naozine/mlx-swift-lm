@@ -404,7 +404,7 @@ class Gemma4SparseMoeBlock: Module {
 class Gemma4TransformerBlock: Module {
     @ModuleInfo(key: "self_attn") var selfAttention: Gemma4Attention
     @ModuleInfo var mlp: Gemma4MLP
-    @ModuleInfo(key: "experts") var expertsBlock: Gemma4SparseMoeBlock
+    @ModuleInfo(key: "experts") var expertsBlock: Gemma4SparseMoeBlock?
 
     @ModuleInfo(key: "input_layernorm") var inputLayerNorm: RMSNorm
     @ModuleInfo(key: "post_attention_layernorm") var postAttentionLayerNorm: RMSNorm
@@ -442,14 +442,16 @@ class Gemma4TransformerBlock: Module {
         self.mlp = Gemma4MLP(dimensions: config.hiddenSize, hiddenDimensions: mlpSize)
 
         self.isMoe = config.numExperts != nil && config.numExperts! > 0
-        let numExperts = config.numExperts ?? 1
 
-        self._expertsBlock.wrappedValue = Gemma4SparseMoeBlock(
-            dimensions: config.hiddenSize,
-            numExperts: numExperts,
-            topK: config.topKExperts ?? 1,
-            moeIntermediateSize: config.moeIntermediateSize ?? config.intermediateSize
-        )
+        if self.isMoe {
+            let numExperts = config.numExperts!
+            self._expertsBlock.wrappedValue = Gemma4SparseMoeBlock(
+                dimensions: config.hiddenSize,
+                numExperts: numExperts,
+                topK: config.topKExperts ?? 1,
+                moeIntermediateSize: config.moeIntermediateSize ?? config.intermediateSize
+            )
+        }
 
         if self.isMoe {
             self._postFeedforwardLayerNorm1.wrappedValue = RMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
@@ -494,7 +496,7 @@ class Gemma4TransformerBlock: Module {
 
             let routerInput = x + attnNorm
             let sparsePreNorm = preFeedforwardLayerNorm2!(routerInput)
-            let sparseOut = expertsBlock(sparsePreNorm, routerInput: routerInput)
+            let sparseOut = expertsBlock!(sparsePreNorm, routerInput: routerInput)
             let sparsePostNorm2 = postFeedforwardLayerNorm2!(sparseOut)
 
             let combined = densePostNorm1 + sparsePostNorm2
