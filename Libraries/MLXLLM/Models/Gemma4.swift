@@ -655,14 +655,16 @@ public class Gemma4Model: Module, LLMModel {
         return out
     }
 
-    public func sanitize(weights: [String: MLXArray], metadata: [String: String]) -> [String: MLXArray] {
+    public func sanitize(weights: [String: MLXArray]) -> [String: MLXArray] {
         var processedWeights = weights
 
+        // Strip language_model prefix (VLM structure)
         let unflattened = ModuleParameters.unflattened(weights)
         if let lm = unflattened["language_model"] {
             processedWeights = Dictionary(uniqueKeysWithValues: lm.flattened())
         }
 
+        // Trim vocab if needed
         let expectedVocab = config.vocabularySize
         let keysToCheck = [
             "model.embed_tokens.weight", "model.embed_tokens.scales", "model.embed_tokens.biases",
@@ -674,67 +676,16 @@ public class Gemma4Model: Module, LLMModel {
             }
         }
 
-        var finalWeights = [String: MLXArray]()
-        for (k, v) in processedWeights {
-            if k.contains("self_attn.rotary_emb") || k.contains("input_max") || k.contains("input_min")
-                || k.contains("output_max") || k.contains("output_min") {
-                continue
-            }
-            if k.hasSuffix(".experts.gate_up_proj.weight") {
-                let base = k.replacingOccurrences(of: ".experts.gate_up_proj.weight", with: ".experts.switch_glu")
-                let parts = MLX.split(v, parts: 2, axis: -2)
-                finalWeights["\(base).gate_proj.weight"] = parts[0]
-                finalWeights["\(base).up_proj.weight"] = parts[1]
-                continue
-            }
-            if k.hasSuffix(".experts.down_proj.weight") {
-                let base = k.replacingOccurrences(of: ".experts.down_proj.weight", with: ".experts.switch_glu.down_proj.weight")
-                finalWeights[base] = v
-                continue
-            }
-            let newK = k.replacingOccurrences(of: ".router.", with: ".experts.router.")
-            finalWeights[newK] = v
-        }
-
-        if let normWeight = weights["language_model.model.per_layer_projection_norm.weight"] {
-            finalWeights["model.per_layer_projection_norm.weight"] = normWeight
-        } else if let normWeight = weights["model.per_layer_projection_norm.weight"] {
-            finalWeights["model.per_layer_projection_norm.weight"] = normWeight
-        }
-
-        // Dequantize router proj weights (may be quantized differently from other layers)
-        for i in 0..<config.hiddenLayers {
-            let wKey = "model.layers.\(i).experts.router.proj.weight"
-            let sKey = "model.layers.\(i).experts.router.proj.scales"
-            let bKey = "model.layers.\(i).experts.router.proj.biases"
-            if let packedW = finalWeights[wKey],
-               let scales = finalWeights[sKey],
-               let biases = finalWeights[bKey] {
-                let bits = 32 * packedW.shape.last! / (scales.shape.last! * 64)
-                finalWeights[wKey] = MLX.dequantized(
-                    packedW, scales: scales, biases: biases, groupSize: 64, bits: bits)
-                finalWeights.removeValue(forKey: sKey)
-                finalWeights.removeValue(forKey: bKey)
-            }
-        }
-
-        // Gemma 4 shares k_proj weights with v_proj
-        for i in 0..<config.hiddenLayers {
-            let kWeightKey = "model.layers.\(i).self_attn.k_proj.weight"
-            let vWeightKey = "model.layers.\(i).self_attn.v_proj.weight"
-            if finalWeights[kWeightKey] != nil && finalWeights[vWeightKey] == nil {
-                finalWeights[vWeightKey] = finalWeights[kWeightKey]
-                for suffix in ["scales", "biases"] {
-                    let kKey = "model.layers.\(i).self_attn.k_proj.\(suffix)"
-                    let vKey = "model.layers.\(i).self_attn.v_proj.\(suffix)"
-                    if finalWeights[kKey] != nil {
-                        finalWeights[vKey] = finalWeights[kKey]
-                    }
+        // tie_word_embeddings: copy embed_tokens to lm_head if missing
+        if processedWeights["lm_head.weight"] == nil {
+            ["weight", "scales", "biases"].forEach { key in
+                if let embedWeight = processedWeights["model.embed_tokens.\(key)"] {
+                    processedWeights["lm_head.\(key)"] = embedWeight
                 }
             }
         }
 
-        return finalWeights
+        return processedWeights
     }
 
     public func newCache(parameters: GenerateParameters? = nil) -> [KVCache] {
