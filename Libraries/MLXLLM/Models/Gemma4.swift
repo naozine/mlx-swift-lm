@@ -262,12 +262,11 @@ class Gemma4Attention: Module {
                 dimensions: headDim, traditional: false,
                 base: config.ropeLocalBaseFreq, scale: 1.0)
         } else {
-            self.rope = Gemma4ProportionalRoPE(
-                dims: self.headDim,
-                traditional: false,
-                base: 1000000.0,
-                partialRotaryFactor: config.globalRopePartialFactor
-            )
+            // Global attention: use partial rotation
+            let rotDims = Int(config.globalRopePartialFactor * Float(self.headDim))
+            self.rope = initializeRope(
+                dims: rotDims, base: 1000000.0, traditional: false,
+                scalingConfig: nil, maxPositionEmbeddings: nil)
         }
 
         super.init()
